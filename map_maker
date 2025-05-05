@@ -1,0 +1,80 @@
+import os
+import pandas as pd
+from geopy.geocoders import GoogleV3
+from geopy.exc import GeocoderTimedOut
+import folium
+
+# File paths
+input_file = '../example/input_data.xlsx'
+output_file = '../example/output_data.xlsx'
+map_file = '../example/map_file.html'
+
+# API key
+google_api_key = ''  # Get API key from Google Cloud Console
+geolocator = GoogleV3(api_key=google_api_key)
+
+# Geocoder
+def geocode_address(geolocator, address, retries=3):
+    try:
+        location = geolocator.geocode(address)
+        if location:
+            return location.latitude, location.longitude
+        else:
+            return None, None
+    except Exception as e:
+        if retries > 0:
+            return geocode_address(geolocator, address, retries - 1)
+        else:
+            print(f"Failed to geocode: {address} | Error: {e}")
+            return None, None
+
+sheet_mapping = {
+    'primary_locations': 'primary_locations',
+    'secondary_locations': 'secondary_locations',
+}
+
+with pd.ExcelWriter(output_file) as writer:
+    for input_sheet, output_sheet in sheet_mapping.items():
+        df = pd.read_excel(input_file, sheet_name=input_sheet)
+        
+        if 'address' not in df.columns:
+            raise ValueError(f"Sheet {input_sheet} must contain an 'address' column")
+        
+        df['latitude'] = df['address'].apply(lambda x: geocode_address(geolocator, x)[0])
+        df['longitude'] = df['address'].apply(lambda x: geocode_address(geolocator, x)[1])
+        
+        output_df = df[['name', 'address', 'latitude', 'longitude']]
+        output_df.to_excel(writer, sheet_name=output_sheet, index=False)
+
+print(f"Geocoding complete. Results saved to {output_file}")
+
+# Initialize folium map
+map = folium.Map(
+    location=[39.8283, -98.5795],
+    tiles="OpenStreetMap",
+    attr='Map Title',
+    zoom_start=4)
+
+def add_markers(dataframe, icon_generator):
+    cleaned = dataframe.dropna(subset=['latitude', 'longitude'])
+    for _, row in cleaned.iterrows():
+        folium.Marker(
+            [row['latitude'], row['longitude']],
+            icon=icon_generator(row),
+            tooltip=row['name']
+        ).add_to(map)
+
+# Primary locations
+primary_df = pd.read_excel(output_file, sheet_name='primary_locations')
+add_markers(primary_df, lambda row: folium.Icon(color='darkblue', icon='star'))
+
+# Secondary locations
+secondary_df = pd.read_excel(output_file, sheet_name='secondary_locations')
+add_markers(secondary_df, lambda row: folium.DivIcon(html=f"""
+    <div><svg>
+        <circle cx="5" cy="5" r="5" fill="#000000" opacity="1"/>
+        <circle cx="5" cy="5" r="4" fill="#FB1111" opacity="1"/> 
+    </svg></div>"""))
+
+map.save(map_file)
+print(f"Map making complete. Results saved to {map_file}")
